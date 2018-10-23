@@ -384,6 +384,62 @@ module.exports = {
   },
 
   /**
+   * Assemble key data object in secret-storage format.
+   * @param {buffer} derivedKey Password-derived secret key.
+   * @param {buffer} privateKey Private key.
+   * @param {buffer} salt Randomly generated salt.
+   * @param {buffer} iv Initialization vector.
+   * @param {Object=} options Encryption parameters.
+   * @param {string=} options.kdf Key derivation function (default: pbkdf2).
+   * @param {string=} options.cipher Symmetric cipher (default: constants.cipher).
+   * @param {Object=} options.kdfparams KDF parameters (default: constants.<kdf>).
+   * @return {Object}
+   */
+  marshalForMnemonic: function (derivedKey, privateKey, salt, iv, options) {
+    var ciphertext, keyObject, algo;
+    options = options || {};
+    options.kdfparams = options.kdfparams || {};
+    algo = options.cipher || this.constants.cipher;
+
+    // encrypt using first 16 bytes of derived key
+    ciphertext = this.encrypt(privateKey, derivedKey.slice(0, 16), iv, algo).toString("hex");
+
+    keyObject = {
+      // address: this.privateKeyToAddress(privateKey).slice(2),
+      crypto: {
+        cipher: options.cipher || this.constants.cipher,
+        ciphertext: ciphertext,
+        cipherparams: { iv: iv.toString("hex") },
+        mac: this.getMAC(derivedKey, ciphertext)
+      },
+      id: uuid.v4(), // random 128-bit UUID
+      version: 3
+    };
+
+    if (options.kdf === "scrypt") {
+      keyObject.crypto.kdf = "scrypt";
+      keyObject.crypto.kdfparams = {
+        dklen: options.kdfparams.dklen || this.constants.scrypt.dklen,
+        n: options.kdfparams.n || this.constants.scrypt.n,
+        r: options.kdfparams.r || this.constants.scrypt.r,
+        p: options.kdfparams.p || this.constants.scrypt.p,
+        salt: salt.toString("hex")
+      };
+
+    } else {
+      keyObject.crypto.kdf = "pbkdf2";
+      keyObject.crypto.kdfparams = {
+        c: options.kdfparams.c || this.constants.pbkdf2.c,
+        dklen: options.kdfparams.dklen || this.constants.pbkdf2.dklen,
+        prf: options.kdfparams.prf || this.constants.pbkdf2.prf,
+        salt: salt.toString("hex")
+      };
+    }
+
+    return keyObject;
+  },
+
+  /**
    * Export private key to keystore secret-storage format.
    * @param {string|buffer} password User-supplied password.
    * @param {string|buffer} privateKey Private key.
@@ -409,6 +465,35 @@ module.exports = {
     // asynchronous if callback provided
     this.deriveKey(password, salt, options, function (derivedKey) {
       cb(this.marshal(derivedKey, privateKey, salt, iv, options));
+    }.bind(this));
+  },
+
+  /**
+   * Export private key to keystore secret-storage format.
+   * @param {string|buffer} password User-supplied password.
+   * @param {string|buffer} privateKey Private key.
+   * @param {string|buffer} salt Randomly generated salt.
+   * @param {string|buffer} iv Initialization vector.
+   * @param {Object=} options Encryption parameters.
+   * @param {string=} options.kdf Key derivation function (default: pbkdf2).
+   * @param {string=} options.cipher Symmetric cipher (default: constants.cipher).
+   * @param {Object=} options.kdfparams KDF parameters (default: constants.<kdf>).
+   * @param {function=} cb Callback function (optional).
+   * @return {Object}
+   */
+  dumpForMnemonic: function (password, privateKey, salt, iv, options, cb) {
+    options = options || {};
+    iv = this.str2buf(iv);
+    privateKey = this.str2buf(privateKey);
+
+    // synchronous if no callback provided
+    if (!isFunction(cb)) {
+      return this.marshalForMnemonic(this.deriveKey(password, salt, options), privateKey, salt, iv, options);
+    }
+
+    // asynchronous if callback provided
+    this.deriveKey(password, salt, options, function (derivedKey) {
+      cb(this.marshalForMnemonic(derivedKey, privateKey, salt, iv, options));
     }.bind(this));
   },
 
